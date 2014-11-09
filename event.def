@@ -1,0 +1,19 @@
+
+#ifndef __EVENT_DEF__
+    #define __EVENT_DEF__
+
+    #define MAX_EVENTS_COUNT    15
+
+
+    typedef enum {  EVENT_ID_STARTUP = 1,                  // spusteni systemu
+                    EVENT_ID_TIME_MEASURE,                 // dokonceno mereni casu
+                    EVENT_ID_TIME_LOOP_MEASURE,            // Pocitani poctu cyklu hlavni smycky
+                    EVENT_ID_HAPI,                         // HAPI komunikace
+                    EVENT_ID_HAPI_TEST,                    // Test HAPI rozhranni
+                    EVENT_ID_NEVER,                        // ladici udalost, nikdy neni vykonana (uzitecne pro nepouzite funkce)
+        
+    } t_event_id;
+
+
+    
+#endif

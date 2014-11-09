@@ -1,0 +1,483 @@
+
+  /////////////////////////////////////////////////////////////////////////////
+  // +---------------------------------------------------------------------+ //
+  // |                   TIME & TIMEOUTS driver for x51                    | //
+  // |                  --------------------------------                   | //
+  // |                        Version 1.30.090830                          | //
+  // |                                                                     | //
+  // |                         Thomas Hoodger                              | //
+  // |                     Copyright (c) 2005-2009                         | //
+  // |                thomas[dot]hoodger(at)gmail[dot]com                  | //
+  // +---------------------------------------------------------------------+ //
+  // | Driver for system time, system timeouts, time measuring and loop    | //
+  // | count measuring                                                     | //
+  // +---------------------------------------------------------------------+ //
+  //                                                                         //
+  //  Version history from 1.20:                                             //
+  // ----------------------------------------------------------------------- //
+  //  1.21         - time_def.k renamed to time.def                          //
+  //               - prejmenovany ID timoutu na bezny tvar cTm_xxx           //
+  // ----------------------------------------------------------------------- //
+  //  1.22         - Slouceny drivery pro MCU RD2 a LPC922                   //
+  //               - Misto ID timeoutu se pouzivaji primo zkracene           //
+  //                 definice timeru                                         //
+  // ----------------------------------------------------------------------- //
+  //  1.23         - Pridana podminena kompilace pro MCU AT89C51ED2          //
+  //               - Pridana podminena kompilace systemoveho casu            //
+  // ----------------------------------------------------------------------- //
+  //  1.24         - Opravena chyba v rutine preruseni casovece,             //
+  //                 dekrementace citacu byla volana 2x                      //
+  // ----------------------------------------------------------------------- //
+  //  1.25         - Opravena chyba v preteceni pri nastaveni roku,          //
+  //                 typ uint namisto char                                   //
+  // ----------------------------------------------------------------------- //
+  //  1.26         - Zmena casovani, doba citace zmenena na 1ms              //
+  //               - Definice jednotlivych casu jsou vypocitavany            //
+  //                 automaticky z hodnoty krystalu a poctu taktu            //
+  // ----------------------------------------------------------------------- //
+  //  1.27         - Pridan citac a flag pro mereni casovych useku           //
+  //               - Pridany obsluhujici rutiny timers_measure_start(),      //
+  //                 timers_measure_stop() a timers_measure_get_value()      //
+  // ----------------------------------------------------------------------- //
+  //  1.28         - Pridano vyvolani udalosti pri skonceni mereni casu      //
+  // ----------------------------------------------------------------------- //
+  //  1.29.090702  - Pridana podminena kompilace mereni poctu cyklu hlavni   //
+  //                 smycky                                                  //
+  // ----------------------------------------------------------------------- //
+  //  1.30.090830  - Opravena chyba v mereni cyklu hlavni smycku             //
+  // ----------------------------------------------------------------------- //
+  //                                                                         //
+  // ----------------------------------------------------------------------- //
+  /////////////////////////////////////////////////////////////////////////////
+
+#pragma LIST
+#pragma PAGELENGTH(30000);
+#pragma LINES
+
+// -------------------------------------------------------------------------
+#include "target.def"
+#include TARGET_SFR_HEADER
+#include "str.h"
+#include "timers.h"
+#include "timers.def"
+#include "timers.mcu"
+#include "event.h"
+#include "event.def"
+
+// -------------------------------------------------------------------------
+// Kompilovat systemovy cas
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+    #include "stdio.h"
+    
+    struct
+    {
+        uint  year;
+        uchar month;
+        uchar day;
+        uchar hour;
+        uchar min;
+        uchar sec;
+    } TARGET_MMEM time;
+    
+    uchar TARGET_MMEM time_to_1sec;            // pocitadlo tiku do 1 sekundy
+    uchar TARGET_MMEM time_str[9];             // buffer pro report casoveho udaje jako retezce
+    uchar TARGET_MMEM date_str[12];            // buffer pro report datumu jako retezce
+#endif                           
+
+// -------------------------------------------------------------------------
+uint TARGET_SMEM timers[TIMERS_COUNT];   // Definice pro obsluhu casoveho limitu
+
+// -------------------------------------------------------------------------
+#if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+    bit              timer_counter_flag;
+    uint TARGET_SMEM timer_counter;
+#endif
+
+// -------------------------------------------------------------------------
+#if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+    bit                timer_loop_timer_flag;
+    bit                timer_loop_timer_start;
+    uint  TARGET_SMEM  timer_loop_timer;
+    ulong TARGET_SMEM  timer_loop_counter;
+    uchar TARGET_XMEM  timer_loop_event;
+#endif
+
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Volano z preruseni - sekunda systemoveho casu                      |
+// +--------------------------------------------------------------------+
+#pragma NOAREGS
+void time_systime_seconds()
+{
+    time.sec++;                         // pocitej cas
+        
+    if(time.sec > 59)
+    { 
+        time.sec = 0;
+        time.min++;
+
+        if(time.min>59)
+        {
+            time.min=0;
+            time.hour++;
+
+            if(time.hour > 23)
+            {
+                time.hour = 0;
+                time.day++;
+
+                if(time.day > 30)
+                {
+                    time.day = 0;
+                    time.month++;
+
+                    if(time.month > 12)
+                    { 
+                        time.month=0;
+                        time.year++;
+                    }
+                }
+            }
+        }
+    }
+}
+#pragma AREGS
+#endif
+
+
+
+// +--------------------------------------------------------------------+
+// |                         Interrupt - Timer 2                        |
+// +--------------------------------------------------------------------+
+#pragma NOAREGS
+#if (TARGET_MCU==C51RD2) || (TARGET_MCU==C51ED2)
+void timer_isr() interrupt TARGET_INTERUPT_TIMER2 using 3
+#endif
+
+#if TARGET_MCU == LPC922
+void timer_isr() interrupt TARGET_INTERUPT_TIMER0 using 3
+#endif
+{
+    uchar timer_id;
+
+    if(timer_mcu_interupt_service())
+    {
+        // decrement all active timers
+        for(timer_id=0; timer_id<TIMERS_COUNT; timer_id++)
+            if(timers[timer_id])
+                timers[timer_id]--;
+
+        #if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+        // if time measure flag - increase counter
+        if(timer_counter_flag)
+            timer_counter++;
+        #endif
+
+
+        #if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+        if(timer_loop_timer_flag)                                   // pokud nastaven flag probihajiciho pocitani
+        {
+            timer_loop_timer++;                                     // pocitej
+            if(timer_loop_timer == TIME_1SEC)
+            {
+                timer_loop_timer_start = 1;                               // nastav flag pozadavku
+                timer_loop_timer_flag  = 1;                               // nastav flag citani
+            }
+        }
+        #endif
+
+
+        #if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+        if(time_to_1sec)
+            time_to_1sec--;      // Odpocitavej 1s
+        else
+        { 
+            time_to_1sec = TIME_TICK_TO_1SEC;     // Napln citac pro 1s
+            time_systime_seconds();
+        }
+        #endif
+    }
+}
+#pragma AREGS
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemovych hodin                                        |
+// +--------------------------------------------------------------------+
+void time_set_time(uchar hour,uchar min,uchar sec)
+{ 
+    time.hour = hour;
+    time.min  = min;
+    time.sec  = sec;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_date(uint year,uchar month,uchar day)
+{ 
+    time.year  = year;
+    time.month = month;
+    time.day   = day;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_hour(uchar hour)
+{ 
+    time.hour = hour;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_minute(uchar minute)
+{ 
+    time.min = minute;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_second(uchar second)
+{ 
+    time.sec = second;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_year(uint year)
+{ 
+    time.year = year;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_month(uchar month)
+{ 
+    time.month = month;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Nastaveni systemoveho data                                         |
+// +--------------------------------------------------------------------+
+void time_set_day(uchar day)
+{ 
+    time.day = day;
+}
+#endif
+
+
+#if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+// +--------------------------------------------------------------------+
+// | Report aktualniho casu do retezce                                  |
+// +--------------------------------------------------------------------+
+char *time_string()
+{
+    sprintf(time_str,"%.2i:%.2i:%.2i", (uint) time.hour, (uint) time.min, (uint) time.sec);  // zapis cas do bufferu
+    //time_str[8] = 0;                                                                   // zapis zero na konec
+    return(time_str);                                                                  // vrat pointer na buffer
+}
+
+char *date_string()
+{
+    sprintf(date_str, "%i.%i.%i", (uint) time.day, (uint) time.month, (uint) time.year);  // zapis cas do bufferu
+    //date_str[8] = 0;                                                                      // zapis zero na konec
+    return(date_str);                                                                     // vrat pointer na buffer
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// | Vrati pointer na nazev casovace timer_id                           |
+// +--------------------------------------------------------------------+
+/*
+char * timer_get_name_str(uint timer_id)
+{
+    if(timer_id < TIMERS_COUNT)
+        return(timer_str_array[timer_id]);
+    else
+        return("!TMR ID OUT OF ARRAY!");
+}
+*/
+
+
+// +--------------------------------------------------------------------+
+// |  Reset citace a start mereni casoveho useku                        |
+// +--------------------------------------------------------------------+
+#if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+void timers_measure_start()
+{
+    timer_counter = 0;                     // reset measured value
+    timer_counter_flag = 1;                // start time measure
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// |  Zastaveni mereni casoveho useku a generovani udalosti             |
+// +--------------------------------------------------------------------+
+#if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+void timers_measure_stop()
+{
+    timer_counter_flag = 0;                      // start time measure
+    event_send(EVENT_ID_TIME_MEASURE, timer_counter);   // send time by event
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// |  Vraci hodnotu citace                                              |
+// +--------------------------------------------------------------------+
+#if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+uint timers_measure_get_value()
+{
+    return(timer_counter);                     // return measured value
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// |  Spusteni testu hlavni programove smycky                           |
+// +--------------------------------------------------------------------+
+#if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+void timers_loop_measure_start(uchar loop_event)
+{
+    timer_loop_event = loop_event;
+    timer_loop_timer = 0;
+    timer_loop_timer_start = 1;
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// |  Vraci hodnotu citace                                              |
+// +--------------------------------------------------------------------+
+#if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+ulong timers_loop_measure_get_value()
+{
+    return(timer_loop_counter);                     // return measured value
+}
+#endif
+
+
+// +--------------------------------------------------------------------+
+// |              Nastaveni parametru a start casovace 2                |
+// +--------------------------------------------------------------------+
+void timers_init()
+{
+    uchar i;
+
+    timers_mcu_init();
+
+    for(i=0; i<TIMERS_COUNT; i++) 
+        timers[i]=0;
+
+    #if TIME_MEASURE_INCLUDE == ROUTINE_INCLUDE
+    timer_counter_flag = 0;   // stop time measure
+    timer_counter = 0;        // reset measured value
+    #endif
+
+    #if SYSTEM_TIME_INCLUDE == ROUTINE_INCLUDE
+    time_set_time(0, 0, 0);
+    time_set_date(0, 0, 0);
+    #endif
+
+    #if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+    timer_loop_timer_flag  = 0;
+    timer_loop_timer_start = 0;
+    timer_loop_timer       = 0;
+    #endif
+}
+
+
+
+// +--------------------------------------------------------------------+
+// |                        Hlavni proces driveru                       |
+// +--------------------------------------------------------------------+
+void timers_proc()
+{
+    #if TIME_LOOP_MEASURE == ROUTINE_INCLUDE
+
+    // Klidovy stav
+    // timer_loop_timer_start == 0
+    // timer_loop_timer_flag  == 0
+
+    // Pozadavek na start
+    // timer_loop_timer_start == 1
+    // timer_loop_timer_flag  == 0
+
+    // Citani
+    // timer_loop_timer_start == 0
+    // timer_loop_timer_flag  == 1
+
+    // Konec citani -> odesli udalost
+    // timer_loop_timer_start == 1
+    // timer_loop_timer_flag  == 1
+
+
+    // Pokud pozadavek na zahajeni pocitani
+    if(timer_loop_timer_start &&                                  // pokud nastaven flag pozadavku na zahajeni
+       ~timer_loop_timer_flag)                                    // a neprobiha citani
+    {
+        timer_loop_counter = 0;
+        timer_loop_timer_start = 0;                               // shod flag pozadavku
+        timer_loop_timer_flag  = 1;                               // zahaj citani
+    }
+    
+    // pokud nastaven flag probihajiciho pocitani a neni pozadavek na start
+    if(timer_loop_timer_flag && 
+       ~timer_loop_timer_start)
+    {
+        timer_loop_counter++;
+    }
+
+    if(timer_loop_timer_flag &&
+       timer_loop_timer_start)         
+    {
+        timer_loop_timer_start = 0;                               // shod flag pozadavku
+        timer_loop_timer_flag = 0;                                // shod flag citani
+        event_send(timer_loop_event, timer_loop_counter);         // odesli udalost se stavem citace
+    }
+
+    #endif
+}
+
+/*
+    A basic operation consists of timer registers THx and TLx (x= 0, 1) connected in cas-
+    Operations cade to form a 16-bit timer. Setting the run control bit (TRx) in TCON register (see
+    Figure 2-3) turns the timer on by allowing the selected input to increment TLx. When
+    TLx overflows it increments THx; when THx overflows it sets the timer overflow flag
+    (TFx) in TCON register. Setting the TRx does not clear the THx and TLx timer registers.
+    Timer registers can be accessed to obtain the current count or to enter preset values.
+    They can be read at any time but TRx bit must be cleared to preset their values, other-
+    wise the behavior of the timer/counter is unpredictable
+*/
+

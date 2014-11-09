@@ -1,0 +1,106 @@
+
+#ifndef __TIMERS_DEF__
+    #define __TIMERS_DEF__
+
+    // ----------------------------------------------------------------------------------
+    // Kompilovat se systemovym casem
+    #define SYSTEM_TIME_INCLUDE       ROUTINE_NOT_INCLUDE
+    #define TIME_MEASURE_INCLUDE      ROUTINE_NOT_INCLUDE
+    #define TIME_LOOP_MEASURE         ROUTINE_INCLUDE
+
+    // ----------------------------------------------------------------------------------
+    // Pri 6-taktovem rezimu, f osc=18.432Mhz a hodnote citace 7800h
+    // probiha preruseni kazdych 10ms, pokud se tedy nastavi hodnota
+    // timeoutu 100, je odpocitavana doba 1s
+    //
+    
+    #if (TARGET_MCU == C51RD2) || (TARGET_MCU == C51ED2)
+    // Pri fosc=18.432Mhz, 6ti taktovem rezimu je takovaci frekvence timeru 18432000/6 = 3072000,
+    // citac tedy funguje jako delic teto frekvence, pokud je tedy hodnota citace 7800h = 30720dec,
+    // bude se vyvolavat preruseni 100x za sekundu. Nejmensi casovatelny okamzik tedy bude 10ms,
+    // nejdelsi bude 655,35sec = 10.92 min.
+    // 
+    // Pokud budeme potrebovat merit useky mensi, napr. 1ms, bude preruseni probihat 1000x za sekundu,
+    // tzn. ze TIMER_VALUE = 3072000 / 1000; hodnota pro casovac tedy bude 3072dec = 0C00h,
+    //
+    // Protoze timer cita vpred je potreba hodnotu odecist od FFFFh, tedy FFFFh - 0C00h = F3FFh
+    #define TIMER_VALUE_H  0xF3
+    #define TIMER_VALUE_L  0xFF
+    #endif
+   
+    #if (TARGET_MCU == LPC922) 
+    // Pri fosc=7.3728Mhz, 2-taktovem rezimu je takovaci frekvence timeru 7372800/2 = 3686400,
+    // Pro 1ms, bude preruseni probihat 1000x za sekundu,
+    // tzn. ze TIMER_VALUE = 3686400/1000; hodnota pro casovac tedy bude 3686dec = E66h,
+    // Protoze timer cita vpred je potreba hodnotu odecist od FFFFh, tedy FFFFh - 0E66h = F199h
+    // Maximalni mozny cas bude tedy 65,53sec.
+    #define TIMER_VALUE_H  0xF1
+    #define TIMER_VALUE_L  0x99
+    #endif
+
+    #define TIMER_VALUE (0xFFFF - ((TIMER_VALUE_H << 8) | TIMER_VALUE_L))
+
+    // ----------------------------------------------------------------------------------
+    // definice ID timeoutu
+    typedef enum
+    {
+        TIMER_ID_LOOP_TEST          =    0, // LoopTest: Test hlavni smycky
+        TIMER_ID_UART,                      // UART:     Timeout pro odesilani znaku
+        TIMER_ID_HAPI,                      // HAPI:     timeout komunikace
+        TIMER_ID_HAPI_TEST,                 // HAPI:     test rozhranni
+        TIMER_ID_LED,                       // LED:      blink timeout
+
+        TIMERS_COUNT                        // Pocet casovacu celkem
+    };
+
+
+    // Prirazeni ID timeoutu indexum v poli timeoutu
+    #define TIMER_LOOP_TEST          timers[ TIMER_ID_LOOP_TEST     ] // LOOPTEST: Test rychlosti hlavni smycky
+    #define TIMER_UART               timers[ TIMER_ID_UART          ] // UART:     Timeout pro odesilani znaku
+    #define TIMER_HAPI               timers[ TIMER_ID_HAPI          ] // HAPI:     Timeout komunikace
+    #define TIMER_HAPI_TEST          timers[ TIMER_ID_HAPI_TEST     ] // HAPI:     Timeout komunikace
+    #define TIMER_LED                timers[ TIMER_ID_LED           ] // LED:      Rizeni doby svitu signalizacnich LED
+
+    // Vypocet poctu tiku preruseni za jednotku casu
+    //                      (18432000    / 6)                       / 3072        = 1000
+    //                      (7373000     / 2)                       / 3687        = 1000
+    #define TIMER_TICK_1MS ((TARGET_XTAL / TARGET_INSTRUCTION_STEP) / TIMER_VALUE / 1000)
+
+    // Definice casovych useku            
+    #define TIME_1MS                    (TIMER_TICK_1MS * 1)
+    #define TIME_5MS                    (TIMER_TICK_1MS * 5)
+    #define TIME_10MS                   (TIMER_TICK_1MS * 10)
+    #define TIME_15MS                   (TIMER_TICK_1MS * 15)
+    #define TIME_20MS                   (TIMER_TICK_1MS * 20)
+    #define TIME_40MS                   (TIMER_TICK_1MS * 40)
+    #define TIME_30MS                   (TIMER_TICK_1MS * 30)
+    #define TIME_50MS                   (TIMER_TICK_1MS * 50)
+    #define TIME_100MS                  (TIMER_TICK_1MS * 100)
+    #define TIME_120MS                  (TIMER_TICK_1MS * 120)
+    #define TIME_150MS                  (TIMER_TICK_1MS * 150)
+    #define TIME_170MS                  (TIMER_TICK_1MS * 170)
+    #define TIME_200MS                  (TIMER_TICK_1MS * 200)
+    #define TIME_300MS                  (TIMER_TICK_1MS * 300)
+    #define TIME_500MS                  (TIMER_TICK_1MS * 500)
+    #define TIME_1SEC                   (TIMER_TICK_1MS * 1000)
+    #define TIME_1500MS                 (TIMER_TICK_1MS * 1500)
+    #define TIME_2SEC                   (TIMER_TICK_1MS * 2000)
+    #define TIME_3SEC                   (TIMER_TICK_1MS * 3000)
+    #define TIME_4SEC                   (TIMER_TICK_1MS * 4000)
+    #define TIME_5SEC                   (TIMER_TICK_1MS * 5000)
+    #define TIME_6SEC                   (TIMER_TICK_1MS * 6000)
+    #define TIME_7SEC                   (TIMER_TICK_1MS * 7000)
+    #define TIME_8SEC                   (TIMER_TICK_1MS * 8000)
+    #define TIME_9SEC                   (TIMER_TICK_1MS * 9000)
+    #define TIME_10SEC                  (TIMER_TICK_1MS * 10000)
+    #define TIME_15SEC                  (TIMER_TICK_1MS * 15000)
+    #define TIME_20SEC                  (TIMER_TICK_1MS * 20000)
+    #define TIME_25SEC                  (TIMER_TICK_1MS * 25000)
+    #define TIME_30SEC                  (TIMER_TICK_1MS * 30000)
+    #define TIME_50SEC                  (TIMER_TICK_1MS * 50000)
+    #define TIME_60SEC                  (TIMER_TICK_1MS * 60000)
+    #define TIME_65SEC                  (TIMER_TICK_1MS * 65000)
+                                        
+
+#endif
+
